@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Legion Control</title>
+<style>
+:root{--bg:#111316;--card:#1a1d22;--line:#2a2f37;--fg:#e7eaef;--mut:#8d97a5;--acc:#ff5a36;--ok:#3fb97a;--warn:#e0a03a;--err:#e5534b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:20px;padding:12px 24px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2;flex-wrap:wrap}
+h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+h1 span{color:var(--acc)}
+.stats{display:flex;gap:18px;flex-wrap:wrap;color:var(--mut);font-variant-numeric:tabular-nums;font-size:13px}
+.stats b{color:var(--fg);font-weight:600}
+.spacer{margin-left:auto}
+main{max-width:1000px;margin:0 auto;padding:20px 24px 60px;display:grid;gap:18px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+h2{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+.sub{color:var(--mut);margin:0 0 14px;font-size:13px}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+.opt{border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer;background:transparent;color:inherit;text-align:left;font:inherit}
+.opt:hover{border-color:#3d4652}
+.opt.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.opt b{display:block;font-size:14px;margin-bottom:2px}
+.opt small{color:var(--mut)}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:transparent;color:inherit;border-radius:999px;padding:6px 14px;font:inherit;cursor:pointer}
+.pill.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.row{display:grid;grid-template-columns:minmax(190px,1.3fr) 2fr 88px 74px;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.rows .row:first-child{border-top:0}
+.lbl small{display:block;color:var(--mut);font-size:12px}
+.lbl.dirty{color:var(--acc)}
+input[type=range]{width:100%;accent-color:var(--acc)}
+input[type=number]{width:100%;background:#0e1013;border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:5px 6px;font:inherit;font-variant-numeric:tabular-nums}
+.btn{background:#262b33;border:1px solid #39414c;color:var(--fg);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:#4a5360}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn:disabled{opacity:.4;cursor:default}
+.note{font-size:12.5px;color:var(--mut);margin:12px 0 0}
+.warn{border-left:3px solid var(--warn);padding:9px 12px;background:#221e17;border-radius:4px;color:#e9d8b8;font-size:13px;margin:0}
+.badge{font-size:11px;font-weight:500;color:var(--mut);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.tblwrap{overflow-x:auto;margin-top:8px}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums}
+td,th{padding:4px 5px;text-align:center}
+th{color:var(--mut);font-weight:500;font-size:12px}
+td.k{color:var(--mut);text-align:left;padding-right:10px;font-size:12.5px}
+td input{width:64px}
+.switch{display:flex;align-items:center;gap:10px;margin-top:14px;cursor:pointer}
+.switch input{accent-color:var(--acc);width:16px;height:16px}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#232830;border:1px solid var(--line);padding:9px 16px;border-radius:8px;max-width:90vw;box-shadow:0 6px 24px #0008}
+#toast.err{border-color:var(--err);color:#ffd6d3}
+@media (max-width:680px){
+  header,main{padding-left:16px;padding-right:16px}
+  .row{grid-template-columns:1fr 88px 74px}
+  .row .lbl{grid-column:1/-1}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>LOQ<span>Control</span></h1>
+  <div class="stats" id="stats"></div>
+  <div class="spacer"><button class="btn" id="quit">Close app</button></div>
+</header>
+<main id="main"><section><p class="sub">Connecting to backend…</p></section></main>
+<div id="toast" hidden></div>
+
+<script>
+"use strict";
+const TOKEN = location.hash.slice(1);
+let S = null;            // last state from backend
+const dirty = {};        // tunable key -> pending value
+let busy = false;
+
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "value") e.value = v;
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) {
+    if (c == null || c === false) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return e;
+}
+
+async function api(path, body) {
+  const opt = { method: body === undefined ? "GET" : "POST", headers: { "X-Token": TOKEN } };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({ error: "bad response (" + r.status + ")" }));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+let toastTimer;
+function toast(msg, err) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = err ? "err" : ""; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, err ? 7000 : 2500);
+}
+
+async function act(path, body, okMsg) {
+  if (busy) return;
+  busy = true;
+  try {
+    const res = await api(path, body);
+    if (res.state) S = res.state;
+    render();
+    if (okMsg) toast(okMsg);
+    return true;
+  } catch (e) {
+    toast(e.message, true);
+    return false;
+  } finally { busy = false; }
+}
+
+/* ---------------- header stats ---------------- */
+function renderStats() {
+  const el = document.getElementById("stats");
+  if (!S) return;
+  const c = S.charge, parts = [];
+  if (c.capacity != null) parts.push(h("span", {}, "Battery ", h("b", {}, c.capacity + "%"), " " + (c.status || "")));
+  if (c.ac != null) parts.push(h("span", {}, "AC ", h("b", {}, c.ac ? "connected" : "unplugged")));
+  for (const t of S.sensors.slice(0, 3)) parts.push(h("span", {}, t.name.replace(/^\w+ /, "") + " ", h("b", {}, t.c + "°C")));
+  for (const f of S.fans.speeds) if (f.rpm != null) parts.push(h("span", {}, f.name.replace(/^\S+ /, "") + " ", h("b", {}, f.rpm + " rpm")));
+  if (S.profile.current) parts.push(h("span", {}, "Mode ", h("b", {}, S.profile.current)));
+  el.replaceChildren(...parts);
+}
+
+/* ---------------- battery ---------------- */
+function chargeSection() {
+  const c = S.charge;
+  const sec = h("section", {}, h("h2", {}, "Battery charge limit"));
+  if (!c.method) {
+    sec.append(h("p", { class: "warn" },
+      "No charge control found. This needs the ideapad_laptop kernel module (provides conservation_mode) " +
+      "or a battery driver with charge_control_end_threshold."));
+    return sec;
+  }
+  const thr = c.method === "threshold";
+  sec.append(h("p", { class: "sub" }, thr
+    ? "Your battery driver supports real start/stop thresholds."
+    : "Uses Lenovo's firmware conservation mode."));
+  const opts = [
+    ["100", "Normal", "Charge to 100%"],
+    ["80", "Conservation mode", thr ? "Start charging 75% · Stop 80%" : "Start charging 75% · Stop 80% (firmware)"],
+    ["90", "Limit 90%", thr ? "Start charging 85% · Stop 90%" : "Holds " + c.limit_low + "–" + c.limit_high + "% (software-managed)"],
+  ];
+  sec.append(h("div", { class: "opts" }, opts.map(([m, t, d]) =>
+    h("button", { class: "opt" + (c.mode === m ? " on" : ""), onclick: () => act("/api/charge", { mode: m }, t + " enabled") },
+      h("b", {}, t), h("small", {}, d)))));
+  if (!thr) {
+    sec.append(h("p", { class: "note" },
+      "Conservation mode is an on/off firmware switch, so the 90% limit is emulated: conservation is switched on at " +
+      c.limit_high + "% and off again at " + c.limit_low + "%."));
+    if (c.mode === "90" && !S.service.installed) {
+      sec.append(h("p", { class: "warn", style: "margin-top:10px" },
+        "The 90% limit only runs while this app is open. When you close it, the app switches conservation on " +
+        "as a safety net (battery stops at about 80%). Install the background service to keep the real 90% " +
+        "limit after closing the app and after reboots."));
+    }
+  }
+  sec.append(serviceControls());
+  return sec;
+}
+
+function serviceControls() {
+  const sv = S.service;
+  const box = h("div", { class: "toolbar", style: "margin-top:14px" });
+  if (sv.installed) {
+    box.append(h("span", { class: "badge" }, "Background service installed"));
+    if (sv.outdated) box.append(h("button", { class: "btn pri", onclick: () => act("/api/service", { install: true }, "Background service updated") }, "Update service"));
+    box.append(h("button", { class: "btn", onclick: () => act("/api/service", { install: false }, "Background service removed") }, "Remove service"));
+  } else {
+    box.append(h("button", { class: "btn pri", onclick: () => act("/api/service", { install: true }, "Background service installed") },
+      "Install background service"));
+    box.append(h("small", { style: "color:var(--mut)" }, "Keeps the 90% limit and saved fan curves active when the app is closed."));
+  }
+  return box;
+}
+
+/* ---------------- platform profile ---------------- */
+function profileSection() {
+  const p = S.profile;
+  const sec = h("section", {}, h("h2", {}, "Power mode"));
+  if (!p.choices.length) {
+    sec.append(h("p", { class: "warn" }, "No platform_profile interface found (/sys/firmware/acpi/platform_profile)."));
+    return sec;
+  }
+  sec.append(h("p", { class: "sub" }, p.choices.includes("custom")
+    ? "Custom-mode settings below only take effect in \"custom\". Applying a setting switches to it automatically."
+    : "Your driver doesn't offer a \"custom\" profile; tunables may be ignored by the firmware."));
+  const names = { "low-power": "Quiet", "balanced": "Balanced", "balanced-performance": "Balanced Performance",
+                  "performance": "Performance", "max-power": "Extreme", "custom": "Custom", "cool": "Cool" };
+  const nm = ch => names[ch] || ch;
+  sec.append(h("div", { class: "pills" }, p.choices.map(ch =>
+    h("button", { class: "pill" + (ch === p.current ? " on" : ""), onclick: () => act("/api/profile", { profile: ch }, "Mode: " + nm(ch)) }, nm(ch)))));
+  return sec;
+}
+
+/* ---------------- custom mode tunables ---------------- */
+function rangeOf(t) {
+  const temp = t.unit === "°C";
+  const min = t.min != null ? t.min : (temp ? 60 : 0);
+  const max = t.max != null ? t.max : (temp ? 100 : 250);
+  return [min, Math.max(max, min + 1), t.step || 1];
+}
+
+function tunableRow(t) {
+  const [min, max, step] = rangeOf(t);
+  const cur = dirty[t.key] != null ? dirty[t.key] : (t.value != null ? t.value : min);
+  const lbl = h("div", { class: "lbl" + (dirty[t.key] != null ? " dirty" : "") }, t.label,
+    h("small", {}, (t.value != null ? "Current " + t.value + " " + t.unit : "Current value unreadable") +
+      " · range " + min + "–" + max + " · " + t.source));
+  const range = h("input", { type: "range", min, max, step, value: cur, "aria-label": t.label });
+  const num = h("input", { type: "number", min, max, step, value: cur, "aria-label": t.label + " value" });
+  const apply = h("button", { class: "btn", disabled: dirty[t.key] == null }, "Apply");
+  const set = v => {
+    v = Number(v);
+    if (Number.isNaN(v)) return;
+    range.value = v; num.value = v;
+    if (v === t.value) delete dirty[t.key]; else dirty[t.key] = v;
+    apply.disabled = dirty[t.key] == null;
+    lbl.classList.toggle("dirty", dirty[t.key] != null);
+    updateApplyAll();
+  };
+  range.addEventListener("input", () => set(range.value));
+  num.addEventListener("change", () => set(num.value));
+  apply.addEventListener("click", async () => {
+    const v = dirty[t.key];
+    delete dirty[t.key];
+    if (!(await act("/api/tunable", { key: t.key, value: v }, t.label + " set to " + v + " " + t.unit))) {
+      dirty[t.key] = v; render();
+    }
+  });
+  return h("div", { class: "row" }, lbl, range, num, apply);
+}
+
+function updateApplyAll() {
+  const b = document.getElementById("applyall");
+  if (b) b.disabled = Object.keys(dirty).length === 0;
+}
+
+async function applyAll() {
+  const keys = Object.keys(dirty);
+  for (const k of keys) {
+    const v = dirty[k];
+    delete dirty[k];
+    if (!(await act("/api/tunable", { key: k, value: v }))) { dirty[k] = v; render(); return; }
+  }
+  toast("Applied " + keys.length + " setting" + (keys.length === 1 ? "" : "s"));
+}
+
+function customSection() {
+  const sec = h("section", {}, h("h2", {}, "Custom mode"));
+  const list = S.tunables;
+  if (!list.length) {
+    sec.append(h("p", { class: "warn" },
+      "No CPU/GPU tunables were found. These come from the kernel's lenovo-wmi-other driver " +
+      "(Linux 6.17+, /sys/class/firmware-attributes/lenovo-wmi-other-*) or the LenovoLegionLinux " +
+      "kernel module. Kernel " + S.kernel + "."));
+    return sec;
+  }
+  sec.append(h("p", { class: "sub" }, "Limits are written to firmware. Ranges come from the firmware where available."));
+  sec.append(h("div", { class: "toolbar" },
+    h("button", { class: "btn pri", id: "applyall", disabled: !Object.keys(dirty).length, onclick: applyAll }, "Apply all changes"),
+    h("button", { class: "btn", onclick: () => { for (const k in dirty) delete dirty[k]; render(); } }, "Discard")));
+  const main = list.filter(t => !t.extra), extra = list.filter(t => t.extra);
+  sec.append(h("div", { class: "rows" }, main.map(tunableRow)));
+  if (extra.length) {
+    sec.append(h("h2", { style: "margin-top:16px" }, "Other firmware tunables", h("span", { class: "badge" }, extra.length)));
+    sec.append(h("div", { class: "rows" }, extra.map(tunableRow)));
+  }
+  if (S.backends.legion_laptop && list.some(t => t.source === "legion_laptop"))
+    sec.append(h("p", { class: "note" }, "LenovoLegionLinux doesn't report ranges, so safe ranges are assumed (60–100 °C, 5–200 W)."));
+  return sec;
+}
+
+/* ---------------- fans ---------------- */
+function fanSection() {
+  const F = S.fans;
+  const sec = h("section", {}, h("h2", {}, "Fan control"));
+  if (!F.curves.length && F.fullspeed == null && !F.point_curve) {
+    sec.append(h("p", { class: "warn" },
+      "No writable fan curve found. Custom fan curves need a legion_laptop kernel driver that supports " +
+      "this laptop. Fans still follow the selected power mode."));
+    return sec;
+  }
+  if (F.point_curve) sec.append(pointCurveEditor(F));
+  for (const c of F.curves) {
+    sec.append(h("p", { class: "sub" }, "Fan curve from " + c.name + " (" + c.id + "). Edit the points and apply. " +
+      "On most Legion models the curve is only used in the custom power mode."));
+    const inputs = [];
+    for (const ch of c.channels) {
+      const head = h("tr", {}, h("th", {}, "Fan " + ch.channel), ch.points.map(p => h("th", {}, "P" + p.point)));
+      const rows = ch.attrs.map(a => h("tr", {}, h("td", { class: "k" }, a),
+        ch.points.map(p => {
+          const v = p.values[a];
+          if (!v) return h("td", {}, "");
+          if (!v.writable) return h("td", {}, v.value != null ? v.value : "?");
+          const inp = h("input", { type: "number", value: v.value != null ? v.value : "", "aria-label": "Fan " + ch.channel + " " + a + " point " + p.point });
+          inp.dataset.id = v.id; inp.dataset.orig = v.value;
+          inputs.push(inp);
+          return h("td", {}, inp);
+        })));
+      sec.append(h("div", { class: "tblwrap" }, h("table", {}, h("thead", {}, head), h("tbody", {}, rows))));
+    }
+    sec.append(h("div", { class: "toolbar", style: "margin-top:12px" },
+      h("button", { class: "btn pri", onclick: () => {
+        const writes = inputs.filter(i => i.value !== "" && i.value !== i.dataset.orig)
+                             .map(i => ({ id: i.dataset.id, value: Number(i.value) }));
+        if (!writes.length) return toast("No changes");
+        act("/api/fan", { writes }, "Fan curve applied");
+      } }, "Apply fan curve")));
+  }
+  if (F.fullspeed != null) {
+    const cb = h("input", { type: "checkbox" });
+    cb.checked = F.fullspeed;
+    cb.addEventListener("change", () => act("/api/fanfull", { on: cb.checked }, "Max fan speed " + (cb.checked ? "on" : "off")));
+    sec.append(h("label", { class: "switch" }, cb, "Max fan speed (overrides the curve)"));
+  }
+  return sec;
+}
+
+function pointCurveEditor(F) {
+  const pts = F.point_curve, mode = S.profile.current || "this mode";
+  const wrap = h("div", {});
+  wrap.append(h("p", { class: "sub" },
+    "Fan curve for the " + mode + " mode: each point says how fast the fans run up to that temperature. " +
+    "The firmware resets the curve when the power mode changes; the app puts your saved curve back " +
+    "(and the background service does when the app is closed)."));
+  const rows = [["CPU °C", 0, 127], ["GPU °C", 1, 127], ["Fan 1 rpm", 2, F.max_rpm], ["Fan 2 rpm", 3, F.max_rpm]];
+  const inputs = pts.map(p => p.map(v => v));
+  const table = h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, ""), pts.map((_, i) => h("th", {}, "P" + (i + 1))))),
+    h("tbody", {}, rows.map(([name, col, max]) => h("tr", {}, h("td", { class: "k" }, name),
+      pts.map((p, i) => {
+        const rpm = col >= 2;
+        const inp = h("input", { type: "number", min: 0, max, step: rpm ? 100 : 1, value: p[col],
+                                 disabled: rpm && i === 0, "aria-label": name + " point " + (i + 1) });
+        inp.addEventListener("change", () => { inputs[i][col] = Number(inp.value); });
+        return h("td", {}, inp);
+      })))));
+  wrap.append(h("div", { class: "tblwrap" }, table));
+  const bar = h("div", { class: "toolbar", style: "margin-top:12px" },
+    h("button", { class: "btn pri", onclick: () => act("/api/fancurve", { points: inputs }, "Fan curve saved for " + mode) },
+      "Apply & save for " + mode),
+    F.saved_for_mode
+      ? h("button", { class: "btn", onclick: () => act("/api/fancurve/forget", {}, "Saved curve removed; firmware curve returns on next mode change") }, "Forget saved curve")
+      : h("small", { style: "color:var(--mut)" }, "Using the firmware's curve"));
+  wrap.append(bar);
+  wrap.append(h("p", { class: "note" },
+    "Rules from the driver: point 1 must be 0 rpm, temperatures and speeds must not go down, max " + F.max_rpm +
+    " rpm, speeds are rounded to 100 rpm."));
+  return wrap;
+}
+
+function render() {
+  renderStats();
+  document.getElementById("main").replaceChildren(chargeSection(), profileSection(), customSection(), fanSection());
+}
+
+function offline(msg) {
+  document.getElementById("stats").replaceChildren();
+  document.getElementById("main").replaceChildren(h("section", {}, h("p", { class: "warn" }, msg)));
+}
+
+let pollTimer;
+async function poll() {
+  try {
+    S = await api("/api/state");
+    renderStats();
+    // refresh charge section live (battery % / mode) without touching sliders
+    const main = document.getElementById("main");
+    if (main.firstChild && main.children.length === 4) main.replaceChild(chargeSection(), main.firstChild);
+  } catch (e) {
+    clearInterval(pollTimer);
+    offline("Lost connection to the backend. Start the app again with ./start.sh");
+  }
+}
+
+document.getElementById("quit").addEventListener("click", async () => {
+  clearInterval(pollTimer);
+  try { await api("/api/quit", {}); } catch (e) {}
+  offline("Legion Control has stopped. You can close this tab.");
+});
+
+(async () => {
+  if (!TOKEN) return offline("Missing access token. Open the app with ./start.sh");
+  try { S = await api("/api/state"); render(); pollTimer = setInterval(poll, 3000); }
+  catch (e) { offline("Could not reach the backend: " + e.message); }
+})();
+</script>
+</body>
+</html>
